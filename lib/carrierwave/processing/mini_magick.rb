@@ -263,7 +263,10 @@ module CarrierWave
         image.format(@format.to_s.downcase) if @format
         image = yield(image)
         image.write(current_path)
-        image.run_command("identify", current_path)
+        # Auctionet: Backported https://github.com/abulava/carrierwave/commit/a60d8d8a33bc2aa6b0ff09c745def6b8e1a892e9
+        ::MiniMagick::Image.new(current_path).identify
+        # image.run_command("identify", current_path) # Auctionet: This implementation only supports mini_magick < 5.0.0
+        # /Auctionet
       ensure
         image.destroy!
       end
