@@ -40,7 +40,11 @@ module CarrierWave
       end
 
       def whitelisted_content_type?(content_type)
-        Array(content_type_whitelist).any? { |item| content_type =~ /#{item}/ }
+        # Anchored and escaped: backport of the CVE-2023-49090 fix.
+        Array(content_type_whitelist).any? do |item|
+          item = Regexp.quote(item) if item.class != Regexp
+          content_type =~ /\A#{item}/
+        end
       end
 
     end # ContentTypeWhitelist

@@ -338,9 +338,15 @@ module CarrierWave
 
     def create_info_block(options)
       return nil unless options
-      assignments = options.map { |k, v| "self.#{k} = #{v}" }
-      code = "lambda { |img| " + assignments.join(";") + "}"
-      eval code
+      # Backport of the CVE-2021-21305 fix: assign options with public_send instead of eval.
+      proc do |img|
+        options.each do |k, v|
+          if v.is_a?(String) && (matches = v.match(/^["'](.+)["']/))
+            v = matches[1]
+          end
+          img.public_send(:"#{k}=", v)
+        end
+      end
     end
 
     def destroy_image(image)

@@ -4,6 +4,7 @@ require 'pathname'
 require 'active_support/core_ext/string/multibyte'
 require 'mime/types'
 require 'mimemagic'
+require 'marcel'
 
 module CarrierWave
 
@@ -310,7 +311,8 @@ module CarrierWave
 
     def existing_content_type
       if @file.respond_to?(:content_type) && @file.content_type
-        @file.content_type.to_s.chomp
+        # Normalized by Marcel: backport of the CVE-2024-29034 fix.
+        Marcel::MimeType.for(declared_type: @file.content_type.to_s.chomp)
       end
     end
 

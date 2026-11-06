@@ -1,6 +1,7 @@
 # encoding: utf-8
 
 require 'open-uri'
+require 'ssrf_filter'
 
 module CarrierWave
   module Uploader
@@ -12,13 +13,17 @@ module CarrierWave
       include CarrierWave::Uploader::Cache
 
       class RemoteFile
-        def initialize(uri)
+        attr_reader :uri
+
+        def initialize(uri, skip_ssrf_protection: false)
           @uri = uri
+          @file, @content_type, @headers = nil
+          @skip_ssrf_protection = skip_ssrf_protection
         end
 
         def original_filename
-          filename = filename_from_header || File.basename(file.base_uri.path)
-          mime_type = MIME::Types[file.content_type].first
+          filename = filename_from_header || File.basename(@uri.path)
+          mime_type = MIME::Types[content_type].first
           unless File.extname(filename).present? || mime_type.blank?
             filename = "#{filename}.#{mime_type.extensions.first}"
           end
@@ -33,12 +38,39 @@ module CarrierWave
           @uri.scheme =~ /^https?$/
         end
 
+        def content_type
+          file
+          @content_type || 'application/octet-stream'
+        end
+
+        def headers
+          file
+          @headers || {}
+        end
+
       private
 
+        # Backport of the CVE-2021-21288 (SSRF) fix: download through SsrfFilter,
+        # which refuses private/internal addresses, also when following redirects.
         def file
           if @file.blank?
-            @file = URI.open(@uri.to_s)
-            @file = @file.is_a?(String) ? StringIO.new(@file) : @file
+            if @skip_ssrf_protection
+              @file = URI.open(@uri.to_s)
+              @file = @file.is_a?(String) ? StringIO.new(@file) : @file
+              @content_type = @file.content_type
+              @headers = @file.meta
+              @uri = @file.base_uri
+            else
+              request = nil
+              response = SsrfFilter.get(@uri, headers: { 'User-Agent' => "CarrierWave/#{CarrierWave::VERSION}" }) do |req|
+                request = req
+              end
+              response.value
+              @file = StringIO.new(response.body)
+              @content_type = response.content_type
+              @headers = response
+              @uri = request.uri
+            end
           end
           @file
 
@@ -47,8 +79,8 @@ module CarrierWave
         end
 
         def filename_from_header
-          if file.meta.include? 'content-disposition'
-            match = file.meta['content-disposition'].match(/filename="?([^"]+)/)
+          if headers['content-disposition']
+            match = headers['content-disposition'].match(/filename="?([^"]+)/)
             return match[1] unless match.nil? || match[1].empty?
           end
         end
@@ -67,7 +99,7 @@ module CarrierWave
       #
       def download!(uri)
         processed_uri = process_uri(uri)
-        file = RemoteFile.new(processed_uri)
+        file = RemoteFile.new(processed_uri, skip_ssrf_protection: skip_ssrf_protection?(processed_uri))
         raise CarrierWave::DownloadError, "trying to download a file which is not served over HTTP" unless file.http?
         cache!(file)
       end
@@ -87,6 +119,26 @@ module CarrierWave
         encoded_uri = URI::DEFAULT_PARSER.escape(uri_parts.shift, /[^\-_.!~*'()a-zA-Z\d;\/?:@&=+$,]/)
         encoded_uri << '?' << URI::DEFAULT_PARSER.escape(uri_parts.join('?')) if uri_parts.any?
         URI.parse(encoded_uri) rescue raise CarrierWave::DownloadError, "couldn't parse URL"
+      end
+
+      ##
+      # If this returns true, SSRF protection will be bypassed.
+      # You can override this if you want to allow accessing specific local URIs that are not SSRF exploitable.
+      #
+      # === Parameters
+      #
+      # [uri (URI)] The URI where the remote file is stored
+      #
+      # === Examples
+      #
+      #     class MyUploader < CarrierWave::Uploader::Base
+      #       def skip_ssrf_protection?(uri)
+      #         uri.hostname == 'localhost' && uri.port == 80
+      #       end
+      #     end
+      #
+      def skip_ssrf_protection?(uri)
+        false
       end
 
     end # Download

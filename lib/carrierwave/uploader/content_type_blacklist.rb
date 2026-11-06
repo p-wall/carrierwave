@@ -40,7 +40,11 @@ module CarrierWave
       end
 
       def blacklisted_content_type?(content_type)
-        Array(content_type_blacklist).any? { |item| content_type =~ /#{item}/ }
+        # Escaped: backport of the CVE-2026-44587 fix.
+        Array(content_type_blacklist).any? do |item|
+          item = Regexp.quote(item) if item.class != Regexp
+          content_type =~ /#{item}/
+        end
       end
 
     end # ContentTypeBlacklist
